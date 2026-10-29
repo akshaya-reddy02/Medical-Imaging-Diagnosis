@@ -19,3 +19,4 @@ src/*backup*.py
 frontend/src/*backup*.jsx
 orthanc_api_preview.png
 orthanc_preview_test.png
+data/segmentation/prediction_output.nii.gz
