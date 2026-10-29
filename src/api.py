@@ -1,4 +1,4 @@
-ï»¿
+
 from pathlib import Path
 from contextlib import asynccontextmanager
 from io import BytesIO
