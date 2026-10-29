@@ -1,0 +1,122 @@
+{
+  "experiment": "Hippocampus 3D U-Net weighted-loss experiment",
+  "device": "cpu",
+  "dataset": "Medical Segmentation Decathlon Task04 Hippocampus",
+  "training_volumes": 12,
+  "validation_volumes": 2,
+  "epochs_requested": 12,
+  "seed": 42,
+  "class_weights": [
+    0.15000000596046448,
+    1.0,
+    1.0
+  ],
+  "best_checkpoint": "models\\hippocampus_3d_unet.pth",
+  "best_validation_loss": 0.638573,
+  "best_validation_dice_foreground": 0.316715,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 1.019796,
+      "validation_loss": 0.972297,
+      "validation_dice_foreground": 0.048308,
+      "validation_dice_anterior": 0.049217,
+      "validation_dice_posterior": 0.047399
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.938247,
+      "validation_loss": 0.906253,
+      "validation_dice_foreground": 0.062626,
+      "validation_dice_anterior": 0.05293,
+      "validation_dice_posterior": 0.072322
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.877387,
+      "validation_loss": 0.855204,
+      "validation_dice_foreground": 0.091007,
+      "validation_dice_anterior": 0.057942,
+      "validation_dice_posterior": 0.124072
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.82797,
+      "validation_loss": 0.813976,
+      "validation_dice_foreground": 0.120411,
+      "validation_dice_anterior": 0.049308,
+      "validation_dice_posterior": 0.191514
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.788659,
+      "validation_loss": 0.781094,
+      "validation_dice_foreground": 0.143319,
+      "validation_dice_anterior": 0.055739,
+      "validation_dice_posterior": 0.230898
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.755217,
+      "validation_loss": 0.752071,
+      "validation_dice_foreground": 0.169752,
+      "validation_dice_anterior": 0.083258,
+      "validation_dice_posterior": 0.256247
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.725789,
+      "validation_loss": 0.726706,
+      "validation_dice_foreground": 0.193241,
+      "validation_dice_anterior": 0.100206,
+      "validation_dice_posterior": 0.286277
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.699136,
+      "validation_loss": 0.703154,
+      "validation_dice_foreground": 0.223205,
+      "validation_dice_anterior": 0.121978,
+      "validation_dice_posterior": 0.324431
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.676049,
+      "validation_loss": 0.685656,
+      "validation_dice_foreground": 0.247231,
+      "validation_dice_anterior": 0.133968,
+      "validation_dice_posterior": 0.360495
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.655819,
+      "validation_loss": 0.670472,
+      "validation_dice_foreground": 0.264248,
+      "validation_dice_anterior": 0.149193,
+      "validation_dice_posterior": 0.379304
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.638127,
+      "validation_loss": 0.651223,
+      "validation_dice_foreground": 0.280374,
+      "validation_dice_anterior": 0.16902,
+      "validation_dice_posterior": 0.391729
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.619761,
+      "validation_loss": 0.638573,
+      "validation_dice_foreground": 0.316715,
+      "validation_dice_anterior": 0.183649,
+      "validation_dice_posterior": 0.449782
+    }
+  ],
+  "limitations": [
+    "Only 12 training and 2 validation volumes were used.",
+    "Class weighting and Dice loss do not guarantee improved performance.",
+    "The held-out MSD test set was not used.",
+    "Results are experimental and not clinical evidence."
+  ],
+  "runtime_seconds": 19.9
+}

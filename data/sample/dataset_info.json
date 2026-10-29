@@ -1,0 +1,60 @@
+{
+  "name": "NIH-CheXpert Hybrid Chest X-ray Dataset",
+  "description": "A unified chest X-ray dataset combining NIH ChestX-ray14 (112,120 images, 30,805 patients) and CheXpert (224,316 images, 65,240 patients). Labels are harmonized across 20 unique pathology classes. Includes uncertainty flags for CheXpert labels, bounding box availability flags for NIH images, and a patient-level train/val/test split.",
+  "total_images": 335768,
+  "sources": {
+    "CheXpert": 223648,
+    "NIH": 112120
+  },
+  "splits": {
+    "train": 268527,
+    "val": 34238,
+    "test": 33003
+  },
+  "unique_patients": 95545,
+  "labels": [
+    "Atelectasis",
+    "Cardiomegaly",
+    "Effusion",
+    "Consolidation",
+    "Edema",
+    "Infiltration",
+    "Mass",
+    "Nodule",
+    "Emphysema",
+    "Fibrosis",
+    "Pleural_Thickening",
+    "Hernia",
+    "Pneumothorax",
+    "Pneumonia",
+    "Lung_Opacity",
+    "Lung_Lesion",
+    "Enlarged_Cardiomediastinum",
+    "Pleural_Effusion",
+    "Fracture",
+    "No_Finding"
+  ],
+  "shared_labels": [
+    "Atelectasis",
+    "Cardiomegaly",
+    "Effusion",
+    "Consolidation",
+    "Edema"
+  ],
+  "image_size": "224x224",
+  "image_format": "PNG",
+  "columns": {
+    "image_id": "original filename",
+    "processed_image": "filename in images/ folder",
+    "source": "NIH or CheXpert",
+    "patient_id": "unique patient ID (prefixed by source)",
+    "age": "patient age in years",
+    "sex": "M / F / Unknown",
+    "view": "PA / AP / Frontal / Lateral",
+    "follow_up_num": "follow-up visit number (NIH only)",
+    "has_bbox": "1 if NIH bounding box exists",
+    "split": "train / val / test",
+    "[label]": "1=positive, 0=negative/unmentioned",
+    "uncertain_[label]": "1=uncertain label (CheXpert only)"
+  }
+}

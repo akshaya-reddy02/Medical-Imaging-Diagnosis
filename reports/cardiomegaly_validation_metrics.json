@@ -1,0 +1,149 @@
+{
+  "target": "Cardiomegaly",
+  "model": "Pretrained ResNet18; frozen backbone; trained classifier head",
+  "experiment_type": "small educational pipeline experiment",
+  "device": "cpu",
+  "epochs_requested": 8,
+  "epochs_completed": 8,
+  "best_epoch_by_validation_loss": 8,
+  "best_validation_loss": 0.6261097931861878,
+  "image_size": 224,
+  "batch_size": 8,
+  "train_images": 500,
+  "validation_images": 100,
+  "patient_overlap": 0,
+  "decision_threshold": 0.5,
+  "accuracy": 0.65,
+  "precision": 0.7027027027027027,
+  "recall": 0.52,
+  "f1": 0.5977011494252874,
+  "average_precision": 0.7196463007953138,
+  "roc_auc": 0.728,
+  "confusion_matrix": [
+    [
+      39,
+      11
+    ],
+    [
+      24,
+      26
+    ]
+  ],
+  "classification_report": {
+    "0": {
+      "precision": 0.6190476190476191,
+      "recall": 0.78,
+      "f1-score": 0.6902654867256637,
+      "support": 50.0
+    },
+    "1": {
+      "precision": 0.7027027027027027,
+      "recall": 0.52,
+      "f1-score": 0.5977011494252874,
+      "support": 50.0
+    },
+    "accuracy": 0.65,
+    "macro avg": {
+      "precision": 0.6608751608751608,
+      "recall": 0.65,
+      "f1-score": 0.6439833180754755,
+      "support": 100.0
+    },
+    "weighted avg": {
+      "precision": 0.660875160875161,
+      "recall": 0.65,
+      "f1-score": 0.6439833180754755,
+      "support": 100.0
+    }
+  },
+  "training_history": [
+    {
+      "epoch": 1,
+      "training_loss": 0.720444317817688,
+      "validation_loss": 0.6840454244613647,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.49,
+      "validation_f1": 0.6382978723404256,
+      "validation_average_precision": 0.7032255197902588,
+      "validation_roc_auc": 0.6539999999999999
+    },
+    {
+      "epoch": 2,
+      "training_loss": 0.6921581597328186,
+      "validation_loss": 0.6562121796607971,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.62,
+      "validation_f1": 0.5,
+      "validation_average_precision": 0.7455433702263832,
+      "validation_roc_auc": 0.7116
+    },
+    {
+      "epoch": 3,
+      "training_loss": 0.6845628042221069,
+      "validation_loss": 0.6489679050445557,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.64,
+      "validation_f1": 0.7096774193548387,
+      "validation_average_precision": 0.7500331704148964,
+      "validation_roc_auc": 0.7288
+    },
+    {
+      "epoch": 4,
+      "training_loss": 0.673785940170288,
+      "validation_loss": 0.6362355732917786,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.65,
+      "validation_f1": 0.6601941747572816,
+      "validation_average_precision": 0.7391912494932146,
+      "validation_roc_auc": 0.7375999999999999
+    },
+    {
+      "epoch": 5,
+      "training_loss": 0.6597432084083558,
+      "validation_loss": 0.6435172438621521,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.58,
+      "validation_f1": 0.38235294117647056,
+      "validation_average_precision": 0.739562184444782,
+      "validation_roc_auc": 0.7416
+    },
+    {
+      "epoch": 6,
+      "training_loss": 0.6608719534873962,
+      "validation_loss": 0.6287237191200257,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.66,
+      "validation_f1": 0.6382978723404256,
+      "validation_average_precision": 0.7279166226800959,
+      "validation_roc_auc": 0.7343999999999999
+    },
+    {
+      "epoch": 7,
+      "training_loss": 0.6452862176895141,
+      "validation_loss": 0.6288146352767945,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.64,
+      "validation_f1": 0.5813953488372093,
+      "validation_average_precision": 0.7207524901318493,
+      "validation_roc_auc": 0.7304
+    },
+    {
+      "epoch": 8,
+      "training_loss": 0.6426178569793701,
+      "validation_loss": 0.6261097931861878,
+      "learning_rate": 0.0003,
+      "validation_accuracy": 0.65,
+      "validation_f1": 0.5977011494252874,
+      "validation_average_precision": 0.7196463007953138,
+      "validation_roc_auc": 0.728
+    }
+  ],
+  "seed": 42,
+  "clinical_use": "Not intended for clinical use or diagnosis.",
+  "limitations": [
+    "Only 500 training and 100 validation images were used.",
+    "Validation metrics are uncertain because the sample is small.",
+    "The selected validation checkpoint must not be treated as a clinical model.",
+    "The held-out test set must remain untouched until final evaluation."
+  ]
+}

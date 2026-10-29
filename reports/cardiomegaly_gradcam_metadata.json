@@ -1,0 +1,13 @@
+{
+  "target": "Cardiomegaly",
+  "image": "CX_patient33319_study4_view1_frontal.jpg",
+  "patient_id": "CX_patient33319",
+  "split": "validation",
+  "true_label": 1,
+  "predicted_label_at_threshold": 0,
+  "predicted_probability": 0.49653151631355286,
+  "decision_threshold": 0.5,
+  "gradcam_target_layer": "layer4[-1]",
+  "clinical_use": "Not intended for clinical use or diagnosis.",
+  "interpretation_warning": "Grad-CAM highlights image regions influencing this model's output. It does not prove disease presence or clinical validity."
+}
