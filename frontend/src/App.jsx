@@ -24,6 +24,9 @@ export default function App() {
   const [classificationResult, setClassificationResult] = useState(null);
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [classificationError, setClassificationError] = useState("");
+  const [gradcamImage, setGradcamImage] = useState(null);
+  const [gradcamLoading, setGradcamLoading] = useState(false);
+  const [gradcamError, setGradcamError] = useState("");
   const [reviewComment, setReviewComment] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewMessage, setReviewMessage] = useState("");
@@ -70,7 +73,7 @@ export default function App() {
 
       if (ids.length === 0) {
         setSelectedStudy(null);
-        setStudyDetails(null);
+      setStudyDetails(null);
       } else {
         setSelectedStudy((current) =>
           current && ids.includes(current) ? current : ids[0]
@@ -210,6 +213,40 @@ export default function App() {
       setClassificationLoading(false);
     }
   }
+  
+  async function runGradCAM() {
+  if (!classificationFile) {
+    setGradcamError("Choose a chest X-ray image first.");
+    return;
+  }
+
+  setGradcamLoading(true);
+  setGradcamError("");
+  setGradcamImage(null);
+
+  try {
+    const formData = new FormData();
+    formData.append("file", classificationFile);
+
+    const response = await fetch(`${API_BASE}/predict/gradcam`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || `Grad-CAM failed: HTTP ${response.status}`);
+    }
+
+    const imageBlob = await response.blob();
+    setGradcamImage(URL.createObjectURL(imageBlob));
+  } catch (err) {
+    setGradcamError(err.message || "Could not generate Grad-CAM.");
+  } finally {
+    setGradcamLoading(false);
+  }
+}
+ 
 
   async function submitReview(decision) {
     if (!classificationResult) {
@@ -704,7 +741,32 @@ export default function App() {
                   {classificationResult.notice ||
                     "Experimental output only. Not validated for clinical diagnosis or treatment."}
                 </p>
-                                <div style={{ marginTop: 20, borderTop: "1px solid #d9deea", paddingTop: 16 }}>
+                       <div style={{ marginTop: 20, borderTop: "1px solid #d9deea", paddingTop: 16 }}>
+  <h3>Grad-CAM explanation</h3>
+  <p className="preview-disclaimer">
+    Experimental visualization of image regions influencing the model output. Not a diagnosis.
+  </p>
+
+  <button
+    type="button"
+    className="secondary-button"
+    onClick={runGradCAM}
+    disabled={gradcamLoading || !classificationFile}
+  >
+    {gradcamLoading ? "Generating..." : "Generate Grad-CAM overlay"}
+  </button>
+
+  {gradcamError && <p role="alert" style={{ color: "crimson" }}>{gradcamError}</p>}
+
+  {gradcamImage && (
+    <img
+      src={gradcamImage}
+      alt="Grad-CAM overlay"
+      style={{ display: "block", maxWidth: "100%", height: "auto", marginTop: 12, borderRadius: 8 }}
+    />
+  )}
+  </div>
+                  <div style={{ marginTop: 20, borderTop: "1px solid #d9deea", paddingTop: 16 }}>
                   <h3>Reviewer decision</h3>
                   <label htmlFor="review-comment">Review comment (optional)</label>
                   <textarea

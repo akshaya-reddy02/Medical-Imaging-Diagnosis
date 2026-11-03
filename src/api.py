@@ -1,4 +1,6 @@
 
+import asyncio
+from src.orthanc_monitor import OrthancMonitor
 from pathlib import Path
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -27,6 +29,9 @@ CLASSIFIER_PATH = BASE_DIR / "models" / "cardiomegaly_resnet18.pth"
 ORTHANC_URL = os.getenv(
     "ORTHANC_URL", "http://127.0.0.1:8042"
 ).rstrip("/")
+
+ORTHANC_USERNAME = os.getenv("ORTHANC_USERNAME", "demo")
+ORTHANC_PASSWORD = os.getenv("ORTHANC_PASSWORD", "DemoOrthanc2026")
 
 ORTHANC_TIMEOUT = 10.0
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -77,7 +82,7 @@ async def orthanc_get(path: str):
             timeout=ORTHANC_TIMEOUT,
             trust_env=False,
         ) as client:
-            response = await client.get(path)
+            response = await client.get(path, auth=(ORTHANC_USERNAME, ORTHANC_PASSWORD))
             response.raise_for_status()
             return response.json()
 
@@ -139,7 +144,33 @@ async def lifespan(app: FastAPI):
         logger.exception("Segmentation model loading failed.")
         app.state.load_errors["segmentation"] = type(exc).__name__
 
-    yield
+        monitor = None
+    monitor_task = None
+
+    if app.state.classifier is not None:
+        monitor = OrthancMonitor(
+            base_url=ORTHANC_URL,
+            username=ORTHANC_USERNAME,
+            password=ORTHANC_PASSWORD,
+            classifier=app.state.classifier,
+            image_transform=app.state.image_transform,
+            threshold=app.state.classifier_threshold,
+        )
+        app.state.orthanc_monitor = monitor
+        monitor_task = asyncio.create_task(monitor.run())
+
+    try:
+        yield
+    finally:
+        if monitor is not None:
+            monitor.stop()
+
+        if monitor_task is not None:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -206,18 +237,39 @@ async def get_orthanc_instance_preview(instance_id: str):
         raise HTTPException(status_code=400, detail="Invalid Orthanc instance ID.")
 
     try:
-        async with httpx.AsyncClient(base_url=ORTHANC_URL, timeout=ORTHANC_TIMEOUT) as client:
-            result = await client.get(f"/instances/{instance_id}/preview")
+        async with httpx.AsyncClient(
+            base_url=ORTHANC_URL,
+            timeout=ORTHANC_TIMEOUT,
+            auth=(ORTHANC_USERNAME, ORTHANC_PASSWORD),
+        ) as client:
+            result = await client.get(
+                f"/instances/{instance_id}/preview"
+            )
             result.raise_for_status()
+
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Preview or DICOM instance not found.") from exc
-        raise HTTPException(status_code=502, detail="Orthanc could not generate the preview.") from exc
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail="Orthanc preview request timed out.") from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Could not connect to Orthanc.") from exc
+            raise HTTPException(
+                status_code=404,
+                detail="Preview or DICOM instance not found.",
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Orthanc could not generate the preview.",
+        ) from exc
 
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Orthanc preview request timed out.",
+        ) from exc
+
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to Orthanc.",
+        ) from exc
+        
     return Response(content=result.content, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
@@ -465,3 +517,85 @@ async def predict_segmentation(file: UploadFile = File(...)):
 
         if input_path:
             cleanup_file(input_path)
+
+
+@app.post("/predict/gradcam")
+async def predict_gradcam(file: UploadFile = File(...)):
+    from fastapi.responses import Response
+    from pytorch_grad_cam import GradCAM
+    from pytorch_grad_cam.utils.image import show_cam_on_image
+    from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+
+    if app.state.classifier is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Classification model is unavailable.",
+        )
+
+    try:
+        content = await file.read(MAX_IMAGE_BYTES + 1)
+    finally:
+        await file.close()
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty image.")
+
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 20 MB.")
+
+    try:
+        with Image.open(BytesIO(content)) as source:
+            image = source.convert("RGB")
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image file.",
+        ) from exc
+
+    image = image.resize((224, 224))
+    original = np.asarray(image, dtype=np.float32) / 255.0
+    tensor = app.state.image_transform(image).unsqueeze(0)
+
+    model = app.state.classifier
+
+    try:
+        with GradCAM(
+            model=model,
+            target_layers=[model.layer4[-1]],
+        ) as cam:
+            grayscale_cam = cam(
+                input_tensor=tensor,
+                targets=[ClassifierOutputTarget(0)],
+            )[0]
+
+        overlay = show_cam_on_image(
+            original,
+            grayscale_cam,
+            use_rgb=True,
+        )
+
+        with torch.no_grad():
+            probability = torch.sigmoid(model(tensor)).item()
+
+    except Exception as exc:
+        logger.exception("Grad-CAM generation failed.")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate Grad-CAM.",
+        ) from exc
+
+    output = BytesIO()
+    Image.fromarray(overlay).save(output, format="PNG")
+
+    return Response(
+        content=output.getvalue(),
+        media_type="image/png",
+        headers={
+            "X-Model-Probability": str(float(probability)),
+            "X-Predicted-Label": str(
+                int(probability >= app.state.classifier_threshold)
+            ),
+            "X-Decision-Threshold": str(app.state.classifier_threshold),
+            "Cache-Control": "no-store",
+        },
+    )

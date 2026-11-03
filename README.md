@@ -38,6 +38,15 @@ An educational medical-imaging AI project developed as part of the Nexvia Techno
 6. The React frontend displays study information, predictions, and review controls.
 7. Review decisions are recorded in the audit database.
 
+## Project Documentation
+
+Detailed project documentation:
+
+- [System Architecture](docs/architecture.md)
+- [API Documentation](docs/API.md)
+- [Test Results](docs/test-results.md)
+- [Limitations and Future Improvements](docs/limitations.md)
+
 ## Project Structure
 
 ```text
