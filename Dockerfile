@@ -3,6 +3,11 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+# Keep glibc/OpenMP from reserving extra per-thread arenas. The Free Render
+# instance only has 512 MB, and inference is single-threaded anyway.
+ENV MALLOC_ARENA_MAX=2
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
 
 WORKDIR /app
 

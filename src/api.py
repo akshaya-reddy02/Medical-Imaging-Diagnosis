@@ -1,6 +1,5 @@
 import cv2
 import asyncio
-from src.orthanc_monitor import OrthancMonitor
 from pathlib import Path
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -8,19 +7,15 @@ import logging
 import os
 import tempfile
 
-import httpx
-import nibabel as nib
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
-from torch import nn
-from torchvision import models, transforms
-
 
 from src.audit_log import router as audit_router
+from src.resnet import resnet18
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,6 +36,34 @@ ENABLE_ORTHANC_MONITOR = os.getenv("ENABLE_ORTHANC_MONITOR", "true").lower() == 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# The model is tiny and requests are rare, so extra inference threads only
+# add per-thread allocator arenas. Keeping them at one lowers the process
+# RSS on the 512 MB Free Render instance.
+torch.set_num_threads(1)
+cv2.setNumThreads(1)
+
+CLASSIFIER_MEAN = (0.485, 0.456, 0.406)
+CLASSIFIER_STD = (0.229, 0.224, 0.225)
+
+
+def prepare_classifier_input(image: Image.Image) -> torch.Tensor:
+    """Reproduce the previous torchvision transform without importing it.
+
+    Resize to 224x224 with bilinear sampling, convert to a float CHW tensor
+    in [0, 1], then apply the ImageNet normalization. This matches the old
+    ``transforms.Compose([Resize, ToTensor, Normalize])`` pipeline.
+    """
+    resized = image.resize((224, 224), resample=Image.BILINEAR)
+    array = np.array(resized, dtype=np.uint8, copy=True)
+    tensor = torch.from_numpy(array).permute(2, 0, 1).contiguous().float()
+    tensor /= 255.0
+
+    mean = torch.tensor(CLASSIFIER_MEAN, dtype=torch.float32).view(3, 1, 1)
+    std = torch.tensor(CLASSIFIER_STD, dtype=torch.float32).view(3, 1, 1)
+    tensor.sub_(mean).div_(std)
+
+    return tensor
 
 
 def cleanup_file(path: str) -> None:
@@ -148,27 +171,28 @@ def load_classifier():
         weights_only=False,
     )
 
-    model = models.resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, 1)
+    model = resnet18(num_classes=1)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
+    # Inference never needs parameter gradients. Grad-CAM attaches its own
+    # gradient to the detached target-layer activation, so freezing here does
+    # not change the saliency math.
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+
     threshold = float(checkpoint.get("decision_threshold", 0.5))
 
-    image_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
+    # Release the checkpoint tensors before serving requests.
+    del checkpoint
 
-    return model, threshold, image_transform
+    return model, threshold, prepare_classifier_input
 
 
 async def orthanc_get(path: str):
     """Retrieve JSON data from the local Orthanc REST API."""
+    import httpx
+
     try:
         async with httpx.AsyncClient(
             base_url=ORTHANC_URL,
@@ -254,6 +278,8 @@ async def lifespan(app: FastAPI):
 
     if ENABLE_ORTHANC_MONITOR and app.state.classifier is not None:
         try:
+            from src.orthanc_monitor import OrthancMonitor
+
             monitor = OrthancMonitor(
                 base_url=ORTHANC_URL,
                 username=ORTHANC_USERNAME,
@@ -572,6 +598,8 @@ async def predict_segmentation(file: UploadFile = File(...)):
             )
 
         mask, summary = app.state.segmenter.predict(input_path)
+
+        import nibabel as nib
 
         source_image = nib.load(input_path)
         mask_array = np.asarray(mask, dtype=np.uint8)
