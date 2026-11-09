@@ -83,6 +83,64 @@ def blend_cam_overlay(
     return output
 
 
+def compute_gradcam_plusplus(
+    model: torch.nn.Module,
+    tensor: torch.Tensor,
+) -> tuple[np.ndarray, float]:
+    """Return a Grad-CAM++ map and the positive-class probability.
+
+    Grad-CAM only needs the gradient of the score with respect to the target
+    layer's output. Freezing the backbone and detaching that activation lets
+    the classifier head build a tiny graph instead of backpropagating through
+    (and retaining) the whole ResNet18 graph. On the 512 MB Free Render
+    instance the full backward pass was enough to trigger an out-of-memory
+    restart, so this keeps the same Grad-CAM++ math with bounded memory.
+    """
+    captured = {}
+
+    def capture(_module, _inputs, output):
+        activation = output.detach().requires_grad_(True)
+        captured["activation"] = activation
+        return activation
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    for parameter in trainable:
+        parameter.requires_grad_(False)
+
+    handle = model.layer4[-1].register_forward_hook(capture)
+    try:
+        with torch.enable_grad():
+            logits = model(tensor)
+            activation = captured["activation"]
+            score = logits[:, 0].sum()
+            grads = torch.autograd.grad(score, activation)[0]
+    finally:
+        handle.remove()
+        for parameter in trainable:
+            parameter.requires_grad_(True)
+
+    activations = activation.detach().cpu().numpy()
+    gradients = grads.detach().cpu().numpy()
+
+    grads_power_2 = gradients ** 2
+    grads_power_3 = grads_power_2 * gradients
+    spatial_axes = (2, 3)
+    sum_activations = np.sum(activations, axis=spatial_axes, keepdims=True)
+    eps = 1e-6
+    aij = grads_power_2 / (
+        2.0 * grads_power_2 + sum_activations * grads_power_3 + eps
+    )
+    aij = np.where(gradients != 0, aij, 0.0)
+    weights = np.sum(np.maximum(gradients, 0.0) * aij, axis=spatial_axes)
+    cam = np.sum(weights[:, :, None, None] * activations, axis=1)[0]
+    cam = np.maximum(cam, 0.0)
+    cam -= cam.min()
+    cam /= max(1e-7, float(cam.max()))
+
+    probability = torch.sigmoid(logits.detach()).item()
+    return np.float32(cam), probability
+
+
 def load_classifier():
     checkpoint = torch.load(
         CLASSIFIER_PATH,
@@ -583,8 +641,6 @@ async def predict_segmentation(file: UploadFile = File(...)):
 @app.post("/predict/gradcam")
 async def predict_gradcam(file: UploadFile = File(...)):
     from fastapi.responses import Response
-    from pytorch_grad_cam import GradCAMPlusPlus
-    from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
     if app.state.classifier is None:
         raise HTTPException(
@@ -637,17 +693,16 @@ async def predict_gradcam(file: UploadFile = File(...)):
         # entire positive response in one border column of the 7x7 feature
         # map. Grad-CAM++ uses second-order gradient weighting, which avoids
         # that collapse and distributes saliency over the cardiac region.
-        with GradCAMPlusPlus(
-            model=model,
-            target_layers=[model.layer4[-1]],
-        ) as cam:
-            grayscale_cam = cam(
-                input_tensor=tensor,
-                targets=[ClassifierOutputTarget(0)],
-            )[0]
+        grayscale_cam, probability = compute_gradcam_plusplus(model, tensor)
 
-        # Grad-CAM is computed at 224x224. Resize only the heatmap to the
-        # original image dimensions so it aligns with the native X-ray.
+        # Grad-CAM is computed on the 7x7 feature map. Match the library's
+        # 224x224 scaling first, then resize only the heatmap to the native
+        # X-ray dimensions so it aligns with the original image.
+        grayscale_cam = cv2.resize(
+            grayscale_cam,
+            (224, 224),
+            interpolation=cv2.INTER_LINEAR,
+        )
         grayscale_cam = cv2.resize(
             grayscale_cam,
             (original_image.width, original_image.height),
@@ -668,9 +723,6 @@ async def predict_gradcam(file: UploadFile = File(...)):
             1.0,
         )
         overlay = blend_cam_overlay(original, cam, alpha)
-
-        with torch.no_grad():
-            probability = torch.sigmoid(model(tensor)).item()
 
     except Exception as exc:
         logger.exception("Grad-CAM generation failed.")
