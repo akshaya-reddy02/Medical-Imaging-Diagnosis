@@ -50,6 +50,39 @@ def cleanup_file(path: str) -> None:
         logger.exception("Could not remove temporary output file.")
 
 
+def blend_cam_overlay(
+    original: np.ndarray,
+    cam: np.ndarray,
+    alpha: np.ndarray,
+) -> np.ndarray:
+    """Blend a Grad-CAM heatmap onto a uint8 image in bounded memory.
+
+    The native-resolution overlay is built one horizontal band at a time so a
+    large radiograph does not create several full-size float32 copies at once.
+    The Free Render instance only has 512 MB, and those copies were enough to
+    trigger an out-of-memory restart during Grad-CAM generation.
+    """
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+
+    height, width = cam.shape
+    output = np.empty((height, width, 3), dtype=np.uint8)
+
+    band_height = 128
+    for top in range(0, height, band_height):
+        bottom = min(height, top + band_height)
+        base = original[top:bottom].astype(np.float32)
+        tint = heatmap[top:bottom].astype(np.float32)
+        weight = alpha[top:bottom, :, None]
+        base *= 1.0 - weight
+        tint *= weight
+        base += tint
+        np.clip(base, 0.0, 255.0, out=base)
+        output[top:bottom] = base.astype(np.uint8)
+
+    return output
+
+
 def load_classifier():
     checkpoint = torch.load(
         CLASSIFIER_PATH,
@@ -581,8 +614,11 @@ async def predict_gradcam(file: UploadFile = File(...)):
 
     # Keep the uploaded image at its native resolution for the overlay so the
     # heatmap and the X-ray share the same coordinate system and aspect ratio.
+    # Store it as uint8 and release the encoded upload early: full-resolution
+    # float32 copies are what pushed the Free Render instance over 512 MB.
     original_image = image
-    original = np.asarray(original_image, dtype=np.float32) / 255.0
+    original = np.asarray(original_image, dtype=np.uint8)
+    del content
 
     # The classifier input is unchanged: the same 224x224 version used before.
     tensor = app.state.image_transform(
@@ -631,14 +667,7 @@ async def predict_gradcam(file: UploadFile = File(...)):
             0.0,
             1.0,
         )
-        heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
-        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-        heatmap = np.float32(heatmap) / 255.0
-        overlay = (
-            original * (1.0 - alpha[..., None])
-            + heatmap * alpha[..., None]
-        )
-        overlay = np.uint8(255 * np.clip(overlay, 0.0, 1.0))
+        overlay = blend_cam_overlay(original, cam, alpha)
 
         with torch.no_grad():
             probability = torch.sigmoid(model(tensor)).item()
