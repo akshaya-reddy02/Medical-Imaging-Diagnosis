@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -27,6 +27,9 @@ export default function App() {
   const [gradcamImage, setGradcamImage] = useState(null);
   const [gradcamLoading, setGradcamLoading] = useState(false);
   const [gradcamError, setGradcamError] = useState("");
+  const [gradcamMeta, setGradcamMeta] = useState(null);
+  const [classificationPreview, setClassificationPreview] = useState(null);
+  const gradcamRequestId = useRef(0);
   const [reviewComment, setReviewComment] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewMessage, setReviewMessage] = useState("");
@@ -34,6 +37,68 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
+
+  // Show the exact file that will be uploaded so a screenshot or other wrong
+  // file is obvious before any inference runs.
+  useEffect(() => {
+    if (!classificationFile) {
+      setClassificationPreview(null);
+      return undefined;
+    }
+
+    const url = URL.createObjectURL(classificationFile);
+    let cancelled = false;
+
+    const base = {
+      url,
+      name: classificationFile.name,
+      size: classificationFile.size,
+      width: null,
+      height: null,
+      warning: "",
+    };
+    setClassificationPreview(base);
+
+    const probe = new Image();
+    probe.onload = () => {
+      if (cancelled) return;
+      const width = probe.naturalWidth;
+      const height = probe.naturalHeight;
+      const aspect = height ? width / height : 0;
+      const looksLikeScreenshot =
+        /screenshot|screen[ _-]?shot|snip|capture/i.test(classificationFile.name) ||
+        (width >= 1280 && aspect > 1.7 && aspect < 1.85);
+      setClassificationPreview({
+        ...base,
+        width,
+        height,
+        warning: looksLikeScreenshot
+          ? "This looks like a desktop screen capture (16:9). Upload the original chest X-ray file, not a screenshot."
+          : "",
+      });
+    };
+    probe.onerror = () => {
+      if (cancelled) return;
+      setClassificationPreview({
+        ...base,
+        warning: "The selected file could not be decoded as an image.",
+      });
+    };
+    probe.src = url;
+
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+    };
+  }, [classificationFile]);
+
+  // Release the previous Grad-CAM blob URL when it is replaced or cleared so a
+  // stale overlay from a different uploaded image can never be displayed.
+  useEffect(() => {
+    if (!gradcamImage) return undefined;
+    return () => URL.revokeObjectURL(gradcamImage);
+  }, [gradcamImage]);
+
   const loadAuditLogs = useCallback(async () => {
     setAuditLoading(true);
     setAuditError("");
@@ -181,6 +246,13 @@ export default function App() {
     event.preventDefault();
     setClassificationError("");
     setClassificationResult(null);
+    // A new classification invalidates any overlay generated for a previous
+    // file, so clear it instead of leaving a stale screenshot overlay visible.
+    gradcamRequestId.current += 1;
+    setGradcamLoading(false);
+    setGradcamImage(null);
+    setGradcamError("");
+    setGradcamMeta(null);
 
     if (!classificationFile) {
       setClassificationError("Choose a chest X-ray image first.");
@@ -215,37 +287,47 @@ export default function App() {
   }
   
   async function runGradCAM() {
-  if (!classificationFile) {
-    setGradcamError("Choose a chest X-ray image first.");
-    return;
-  }
-
-  setGradcamLoading(true);
-  setGradcamError("");
-  setGradcamImage(null);
-
-  try {
-    const formData = new FormData();
-    formData.append("file", classificationFile);
-
-    const response = await fetch(`${API_BASE}/predict/gradcam`, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || `Grad-CAM failed: HTTP ${response.status}`);
+    if (!classificationFile) {
+      setGradcamError("Choose a chest X-ray image first.");
+      return;
     }
 
-    const imageBlob = await response.blob();
-    setGradcamImage(URL.createObjectURL(imageBlob));
-  } catch (err) {
-    setGradcamError(err.message || "Could not generate Grad-CAM.");
-  } finally {
-    setGradcamLoading(false);
+    const requestId = gradcamRequestId.current + 1;
+    gradcamRequestId.current = requestId;
+
+    setGradcamLoading(true);
+    setGradcamError("");
+    setGradcamImage(null);
+    setGradcamMeta(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", classificationFile);
+
+      const response = await fetch(`${API_BASE}/predict/gradcam`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || `Grad-CAM failed: HTTP ${response.status}`);
+      }
+
+      const imageBlob = await response.blob();
+      // Ignore a response for a file that is no longer selected.
+      if (gradcamRequestId.current !== requestId) return;
+
+      setGradcamImage(URL.createObjectURL(imageBlob));
+    } catch (err) {
+      if (gradcamRequestId.current !== requestId) return;
+      setGradcamError(err.message || "Could not generate Grad-CAM.");
+    } finally {
+      if (gradcamRequestId.current === requestId) {
+        setGradcamLoading(false);
+      }
+    }
   }
-}
  
 
   async function submitReview(decision) {
@@ -680,12 +762,63 @@ export default function App() {
                 type="file"
                 accept="image/*"
                 onChange={(event) => {
+                  gradcamRequestId.current += 1;
                   setClassificationFile(event.target.files?.[0] ?? null);
                   setClassificationResult(null);
                   setClassificationError("");
+                  setGradcamLoading(false);
+                  setGradcamImage(null);
+                  setGradcamError("");
+                  setGradcamMeta(null);
                 }}
                 style={{ display: "block", width: "100%", marginBottom: 16 }}
               />
+              {classificationPreview && (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "flex-start",
+                    marginBottom: 16,
+                    padding: 12,
+                    border: "1px solid #d9deea",
+                    borderRadius: 10,
+                    background: "#f8fafc",
+                  }}
+                >
+                  <img
+                    src={classificationPreview.url}
+                    alt="Preview of the selected image"
+                    style={{
+                      width: 96,
+                      height: 96,
+                      objectFit: "contain",
+                      borderRadius: 6,
+                      background: "#fff",
+                      border: "1px solid #e2e8f0",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                    <div>
+                      <strong>Selected file:</strong> {classificationPreview.name}
+                    </div>
+                    <div>
+                      {classificationPreview.width && classificationPreview.height
+                        ? `${classificationPreview.width} × ${classificationPreview.height} px (aspect ${(
+                            classificationPreview.width / classificationPreview.height
+                          ).toFixed(2)})`
+                        : "Reading dimensions…"}
+                    </div>
+                    <div>{Math.max(1, Math.round(classificationPreview.size / 1024))} KB</div>
+                    {classificationPreview.warning && (
+                      <div style={{ color: "#b45309", marginTop: 4, fontWeight: 600 }}>
+                        ⚠ {classificationPreview.warning}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <button
                 className="primary-button"
                 type="submit"
@@ -759,13 +892,37 @@ export default function App() {
   {gradcamError && <p role="alert" style={{ color: "crimson" }}>{gradcamError}</p>}
 
   {gradcamImage && (
+  <div style={{ marginTop: "16px", maxWidth: "650px" }}>
+    <h4>Chest X-Ray with Grad-CAM Heatmap</h4>
+    <p className="preview-disclaimer" style={{ marginTop: 0 }}>
+      Generated from the selected file:{" "}
+      <strong>{classificationPreview?.name || classificationFile?.name || "unknown"}</strong>
+      {gradcamMeta?.width && gradcamMeta?.height
+        ? ` · output ${gradcamMeta.width} × ${gradcamMeta.height} px`
+        : ""}
+    </p>
     <img
       src={gradcamImage}
-      alt="Grad-CAM overlay"
-      style={{ display: "block", maxWidth: "100%", height: "auto", marginTop: 12, borderRadius: 8 }}
+      alt="Chest X-ray with Grad-CAM heatmap overlay"
+      onLoad={(event) =>
+        setGradcamMeta({
+          width: event.currentTarget.naturalWidth,
+          height: event.currentTarget.naturalHeight,
+        })
+      }
+      style={{
+        display: "block",
+        width: "auto",
+        maxWidth: "100%",
+        height: "auto",
+        objectFit: "contain",
+        borderRadius: "8px",
+      }}
     />
-  )}
   </div>
+)}
+
+
                   <div style={{ marginTop: 20, borderTop: "1px solid #d9deea", paddingTop: 16 }}>
                   <h3>Reviewer decision</h3>
                   <label htmlFor="review-comment">Review comment (optional)</label>
@@ -808,7 +965,9 @@ export default function App() {
                   {reviewError && (
                     <p role="alert" style={{ color: "crimson" }}>{reviewError}</p>
                   )}
+                  
                 </div>
+              </div>
               </div>
             )}
 

@@ -1,4 +1,4 @@
-
+import cv2
 import asyncio
 from src.orthanc_monitor import OrthancMonitor
 from pathlib import Path
@@ -19,7 +19,7 @@ from starlette.background import BackgroundTask
 from torch import nn
 from torchvision import models, transforms
 
-from segmentation_inference import HippocampusSegmenter
+
 from src.audit_log import router as audit_router
 
 
@@ -36,6 +36,8 @@ ORTHANC_PASSWORD = os.getenv("ORTHANC_PASSWORD", "DemoOrthanc2026")
 ORTHANC_TIMEOUT = 10.0
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_MRI_BYTES = 100 * 1024 * 1024
+ENABLE_SEGMENTATION = os.getenv("ENABLE_SEGMENTATION", "true").lower() == "true"
+ENABLE_ORTHANC_MONITOR = os.getenv("ENABLE_ORTHANC_MONITOR", "true").lower() == "true"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,58 +121,80 @@ async def orthanc_get(path: str):
             detail="Orthanc is unavailable or returned invalid JSON.",
         ) from exc
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.classifier = None
     app.state.classifier_threshold = 0.5
     app.state.image_transform = None
     app.state.segmenter = None
+    app.state.orthanc_monitor = None
     app.state.load_errors = {}
 
+    # Load classification model
     try:
         (
             app.state.classifier,
             app.state.classifier_threshold,
             app.state.image_transform,
         ) = load_classifier()
+
     except Exception as exc:
         logger.exception("Classifier loading failed.")
         app.state.load_errors["classification"] = type(exc).__name__
 
-    try:
-        app.state.segmenter = HippocampusSegmenter()
-    except Exception as exc:
-        logger.exception("Segmentation model loading failed.")
-        app.state.load_errors["segmentation"] = type(exc).__name__
+    # Load segmentation model only when enabled
+    if ENABLE_SEGMENTATION:
+        try:
+            from segmentation_inference import HippocampusSegmenter
 
-        monitor = None
+            app.state.segmenter = HippocampusSegmenter()
+
+        except Exception as exc:
+            logger.exception("Segmentation model loading failed.")
+            app.state.load_errors["segmentation"] = type(exc).__name__
+    else:
+        app.state.load_errors["segmentation"] = (
+            "Disabled by deployment configuration"
+        )
+
+    # Start Orthanc monitor only when enabled
+    monitor = None
     monitor_task = None
 
-    if app.state.classifier is not None:
-        monitor = OrthancMonitor(
-            base_url=ORTHANC_URL,
-            username=ORTHANC_USERNAME,
-            password=ORTHANC_PASSWORD,
-            classifier=app.state.classifier,
-            image_transform=app.state.image_transform,
-            threshold=app.state.classifier_threshold,
-        )
-        app.state.orthanc_monitor = monitor
-        monitor_task = asyncio.create_task(monitor.run())
+    if ENABLE_ORTHANC_MONITOR and app.state.classifier is not None:
+        try:
+            monitor = OrthancMonitor(
+                base_url=ORTHANC_URL,
+                username=ORTHANC_USERNAME,
+                password=ORTHANC_PASSWORD,
+                classifier=app.state.classifier,
+                image_transform=app.state.image_transform,
+                threshold=app.state.classifier_threshold,
+            )
+
+            app.state.orthanc_monitor = monitor
+            monitor_task = asyncio.create_task(monitor.run())
+
+        except Exception as exc:
+            logger.exception("Orthanc monitor startup failed.")
+            app.state.load_errors["orthanc_monitor"] = type(exc).__name__
 
     try:
         yield
+
     finally:
         if monitor is not None:
             monitor.stop()
 
         if monitor_task is not None:
             monitor_task.cancel()
+
             try:
                 await monitor_task
             except asyncio.CancelledError:
                 pass
+
+
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -526,8 +550,7 @@ async def predict_segmentation(file: UploadFile = File(...)):
 @app.post("/predict/gradcam")
 async def predict_gradcam(file: UploadFile = File(...)):
     from fastapi.responses import Response
-    from pytorch_grad_cam import GradCAM
-    from pytorch_grad_cam.utils.image import show_cam_on_image
+    from pytorch_grad_cam import GradCAMPlusPlus
     from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
     if app.state.classifier is None:
@@ -556,14 +579,29 @@ async def predict_gradcam(file: UploadFile = File(...)):
             detail="Invalid image file.",
         ) from exc
 
-    image = image.resize((224, 224))
-    original = np.asarray(image, dtype=np.float32) / 255.0
-    tensor = app.state.image_transform(image).unsqueeze(0)
+    # Keep the uploaded image at its native resolution for the overlay so the
+    # heatmap and the X-ray share the same coordinate system and aspect ratio.
+    original_image = image
+    original = np.asarray(original_image, dtype=np.float32) / 255.0
+
+    # The classifier input is unchanged: the same 224x224 version used before.
+    tensor = app.state.image_transform(
+        original_image.resize((224, 224))
+    ).unsqueeze(0)
 
     model = app.state.classifier
 
     try:
-        with GradCAM(
+        # Grad-CAM++ instead of first-order Grad-CAM. The classifier is a
+        # frozen ImageNet ResNet18 backbone followed by global average pooling
+        # and a single linear output neuron. With that architecture the
+        # gradient of the logit with respect to layer4[-1] is spatially
+        # uniform (every location contributes equally to the global average),
+        # so plain Grad-CAM collapses to the linear-head CAM and can put the
+        # entire positive response in one border column of the 7x7 feature
+        # map. Grad-CAM++ uses second-order gradient weighting, which avoids
+        # that collapse and distributes saliency over the cardiac region.
+        with GradCAMPlusPlus(
             model=model,
             target_layers=[model.layer4[-1]],
         ) as cam:
@@ -572,11 +610,35 @@ async def predict_gradcam(file: UploadFile = File(...)):
                 targets=[ClassifierOutputTarget(0)],
             )[0]
 
-        overlay = show_cam_on_image(
-            original,
+        # Grad-CAM is computed at 224x224. Resize only the heatmap to the
+        # original image dimensions so it aligns with the native X-ray.
+        grayscale_cam = cv2.resize(
             grayscale_cam,
-            use_rgb=True,
+            (original_image.width, original_image.height),
+            interpolation=cv2.INTER_LINEAR,
         )
+
+        # Normalize the CAM and tint only the regions with meaningful
+        # activation. show_cam_on_image() blends the full jet colormap at a
+        # fixed 50% weight, which colours even zero-activation background and
+        # makes a localized CAM look like it covers the whole image. Keeping
+        # the original radiograph outside the significant region makes the
+        # heatmap read as an overlay on the anatomy rather than a colour wash.
+        cam = cv2.normalize(grayscale_cam, None, 0.0, 1.0, cv2.NORM_MINMAX)
+        threshold = max(0.35, float(np.percentile(cam, 75)))
+        alpha = np.clip(
+            (cam - threshold) / max(1e-6, 1.0 - threshold),
+            0.0,
+            1.0,
+        )
+        heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        heatmap = np.float32(heatmap) / 255.0
+        overlay = (
+            original * (1.0 - alpha[..., None])
+            + heatmap * alpha[..., None]
+        )
+        overlay = np.uint8(255 * np.clip(overlay, 0.0, 1.0))
 
         with torch.no_grad():
             probability = torch.sigmoid(model(tensor)).item()
