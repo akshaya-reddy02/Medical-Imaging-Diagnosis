@@ -704,10 +704,11 @@ async def predict_gradcam(file: UploadFile = File(...)):
     original = np.asarray(original_image, dtype=np.uint8)
     del content
 
-    # The classifier input is unchanged: the same 224x224 version used before.
-    tensor = app.state.image_transform(
-        original_image.resize((224, 224))
-    ).unsqueeze(0)
+    # Use the exact same preprocessing as /predict/classification so the
+    # heatmap explains the prediction the user actually sees. Resizing here
+    # first would resample with PIL's default bicubic filter and shift the
+    # model probability.
+    tensor = app.state.image_transform(original_image).unsqueeze(0)
 
     model = app.state.classifier
 
